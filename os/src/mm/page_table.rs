@@ -107,6 +107,21 @@ impl PageTable {
         }
         result
     }
+
+    ///
+    pub fn if_exist(&self, vpn: VirtPageNum) -> bool {
+        match self.find_pte(vpn) {
+            Some(pte) => {
+                if pte.is_valid() {
+                    return true;
+                } else {
+                    return false;
+                }
+            },
+            None => return false
+        }
+    }
+
     /// Find PageTableEntry by VirtPageNum
     fn find_pte(&self, vpn: VirtPageNum) -> Option<&mut PageTableEntry> {
         let idxs = vpn.indexes();
@@ -125,11 +140,13 @@ impl PageTable {
         }
         result
     }
+
     /// set the map between virtual page number and physical page number
     #[allow(unused)]
     pub fn map(&mut self, vpn: VirtPageNum, ppn: PhysPageNum, flags: PTEFlags) {
         let pte = self.find_pte_create(vpn).unwrap();
         assert!(!pte.is_valid(), "vpn {:?} is mapped before mapping", vpn);
+        // println!("user: {}, page table add: vpn{:#x} ppn{:#x}", current_user_token(), vpn.0, ppn.0);
         *pte = PageTableEntry::new(ppn, flags | PTEFlags::V);
     }
     /// remove the map between virtual page number and physical page number

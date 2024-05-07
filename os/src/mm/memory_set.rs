@@ -63,6 +63,79 @@ impl MemorySet {
             None,
         );
     }
+
+    ///
+    pub fn insert_framed_area_with_check (
+        &mut self,
+        start_va: VirtAddr,
+        end_va: VirtAddr,
+        permission: MapPermission,
+    ) -> bool {
+        return self.push_with_check(
+            MapArea::new(start_va, end_va, MapType::Framed, permission),
+            None,
+        );
+    }
+
+    ///
+    pub fn remove_framed_area_with_check (
+        &mut self,
+        start_va: VirtAddr,
+        end_va: VirtAddr
+    ) -> bool {
+        let start_vn = start_va.floor();
+        let end_vn = end_va.ceil();
+        for vpn in start_vn.0..end_vn.0 {
+            if !self.page_table.if_exist(VirtPageNum(vpn)) {
+                return false;
+            }
+        }
+    //     if let Some(area) = self
+    //     .areas
+    //     .iter_mut()
+    //     .find(|area| area.vpn_range.get_start() == start.floor())
+    // {
+    //     area.shrink_to(&mut self.page_table, new_end.ceil());
+    //     true
+    // } else {
+    //     false
+    // }
+        let mut index = start_vn.0;
+        while index < end_vn.0 {
+            if let Some(area) = self.areas.
+                    iter_mut().
+                    find(|area| index >= area.vpn_range.get_start().0 && index < area.vpn_range.get_end().0) {
+                if end_vn.0 <= area.vpn_range.get_end().0 {
+                    for i in index..end_vn.0 {
+                        area.unmap_one(&mut self.page_table, VirtPageNum(i));
+                    }
+                    index = end_vn.0;
+                } else {
+                    let tmp = area.vpn_range.get_end().0;
+                    for i in index..tmp {
+                        area.unmap_one(&mut self.page_table, VirtPageNum(i));
+                    }
+                    index = tmp;
+                }
+            }
+        }
+        return true;
+    }
+
+    fn push_with_check(&mut self, mut map_area: MapArea, data: Option<&[u8]>) -> bool {
+        for vpn in map_area.vpn_range {
+            if self.page_table.if_exist(vpn) {
+                return false;
+            }
+        }
+        map_area.map(&mut self.page_table);
+        if let Some(data) = data {
+            map_area.copy_data(&mut self.page_table, data);
+        }
+        self.areas.push(map_area);
+        return true;
+    }
+
     fn push(&mut self, mut map_area: MapArea, data: Option<&[u8]>) {
         map_area.map(&mut self.page_table);
         if let Some(data) = data {
@@ -262,6 +335,15 @@ impl MemorySet {
             false
         }
     }
+
+    ///
+    pub fn check(&self, addr: VirtAddr) -> bool {
+        if self.page_table.if_exist(addr.ceil()) {
+            return true;
+        } else {
+            return false;
+        }
+    }
 }
 /// map area structure, controls a contiguous piece of virtual memory
 pub struct MapArea {
@@ -300,6 +382,7 @@ impl MapArea {
             }
         }
         let pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap();
+        // println!("vpn: {:#x}, ppn: {:#x}, pte_flags: {:#x}", vpn.0, ppn.0, pte_flags.bits());
         page_table.map(vpn, ppn, pte_flags);
     }
     #[allow(unused)]

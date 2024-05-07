@@ -17,10 +17,13 @@ mod task;
 use crate::loader::{get_app_data, get_num_app};
 use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
+use crate::config::MAX_SYSCALL_NUM;
+use crate::timer::get_time_ms;
 use alloc::vec::Vec;
 use lazy_static::*;
 use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
+use crate::mm::{VirtAddr, MapPermission};
 
 pub use context::TaskContext;
 
@@ -79,6 +82,8 @@ impl TaskManager {
         let mut inner = self.inner.exclusive_access();
         let next_task = &mut inner.tasks[0];
         next_task.task_status = TaskStatus::Running;
+        next_task.has_ran_before = true;
+        next_task.create_time = get_time_ms();
         let next_task_cx_ptr = &next_task.task_cx as *const TaskContext;
         drop(inner);
         let mut _unused = TaskContext::zero_init();
@@ -94,6 +99,42 @@ impl TaskManager {
         let mut inner = self.inner.exclusive_access();
         let cur = inner.current_task;
         inner.tasks[cur].task_status = TaskStatus::Ready;
+    }
+
+    fn get_current_task(&self) -> Option<([u32;MAX_SYSCALL_NUM], usize)> {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        if inner.tasks[current].task_status == TaskStatus::Running {
+            return Some((inner.tasks[current].syscal_num.clone(),inner.tasks[current].create_time));
+        } else {
+            return None;
+        }
+    }
+
+    fn record_syscall(&self, code: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        if inner.tasks[current].task_status == TaskStatus::Running {
+            inner.tasks[current].syscal_num[code] += 1;
+        }
+    }
+
+    fn mmap(&self, start: VirtAddr, end: VirtAddr, permission: MapPermission) -> bool {
+        let mut inner = self.inner.exclusive_access();
+        let cur = inner.current_task;
+        return inner.tasks[cur].memory_set.insert_framed_area_with_check(start, end, permission);
+    }
+
+    fn check(&self, addr: VirtAddr) -> bool {
+        let inner = self.inner.exclusive_access();
+        let cur = inner.current_task;
+        return inner.tasks[cur].memory_set.check(addr);   
+    }
+
+    fn munmap(&self, start: VirtAddr, end: VirtAddr) -> bool {
+        let mut inner = self.inner.exclusive_access();
+        let cur = inner.current_task;
+        return inner.tasks[cur].memory_set.remove_framed_area_with_check(start, end);
     }
 
     /// Change the status of current `Running` task into `Exited`.
@@ -139,6 +180,10 @@ impl TaskManager {
         if let Some(next) = self.find_next_task() {
             let mut inner = self.inner.exclusive_access();
             let current = inner.current_task;
+            if inner.tasks[next].has_ran_before == false {
+                inner.tasks[next].create_time = get_time_ms();
+                inner.tasks[next].has_ran_before = true;
+            }
             inner.tasks[next].task_status = TaskStatus::Running;
             inner.current_task = next;
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
@@ -201,4 +246,29 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+/// help
+pub fn get_current_task() -> Option<([u32;MAX_SYSCALL_NUM], usize)> {
+    return TASK_MANAGER.get_current_task();
+}
+
+/// 
+pub fn record_syscall_for_task(code: usize) {
+    TASK_MANAGER.record_syscall(code);
+}
+
+///
+pub fn mmap(start: VirtAddr, end: VirtAddr, permission: MapPermission) -> bool {
+   return TASK_MANAGER.mmap(start, end, permission);
+}
+
+///
+pub fn check_mmap(addr: VirtAddr) -> bool {
+    return TASK_MANAGER.check(addr);
+ }
+
+///
+pub fn munmap(start: VirtAddr, end: VirtAddr) -> bool {
+    return TASK_MANAGER.munmap(start, end);
 }

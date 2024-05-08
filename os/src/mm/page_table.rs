@@ -158,6 +158,21 @@ impl PageTable {
     pub fn token(&self) -> usize {
         8usize << 60 | self.root_ppn.0
     }
+
+    ///
+    pub fn if_exist(&self, vpn: VirtPageNum) -> bool {
+        match self.find_pte(vpn) {
+            Some(pte) => {
+                if pte.is_valid() {
+                    return true;
+                } else {
+                    return false;
+                }
+            },
+            None => return false
+        }
+    }
+
 }
 
 /// Translate&Copy a ptr[u8] array with LENGTH len to a mutable u8 Vec through page table

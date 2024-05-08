@@ -1,14 +1,17 @@
 //! Process management syscalls
 use alloc::sync::Arc;
+use core::mem::size_of;
 
 use crate::{
-    config::MAX_SYSCALL_NUM,
+    config::{MAX_SYSCALL_NUM, PAGE_SIZE},
     loader::get_app_data_by_name,
-    mm::{translated_refmut, translated_str},
+    mm::{translated_refmut, translated_str, translated_byte_buffer, MapPermission},
     task::{
         add_task, current_task, current_user_token, exit_current_and_run_next,
         suspend_current_and_run_next, TaskStatus,
     },
+    timer::{get_time_us, get_time_ms},
+    task::{mmap, munmap}
 };
 
 #[repr(C)]
@@ -122,7 +125,17 @@ pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
         "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    let us: usize = get_time_us();
+
+    let buffers = translated_byte_buffer(current_user_token(), _ts as *const u8, size_of::<TimeVal>());
+    let ts = buffers[0].as_ptr() as *mut TimeVal;
+    unsafe {
+        *ts = TimeVal {
+            sec: us / 1_000_000,
+            usec: us % 1_000_000,
+        }
+    }
+    0
 }
 
 /// YOUR JOB: Finish sys_task_info to pass testcases
@@ -133,7 +146,25 @@ pub fn sys_task_info(_ti: *mut TaskInfo) -> isize {
         "kernel:pid[{}] sys_task_info NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    let buffers = translated_byte_buffer(current_user_token(), _ti as *const u8, size_of::<TaskInfo>());
+    let ti = buffers[0].as_ptr() as *mut TaskInfo;
+    let us = get_time_ms();
+    if let Some(task_control_block) = current_task() {
+        let inner = task_control_block.as_ref().inner_exclusive_access();
+        if inner.task_status == TaskStatus::Running {
+            unsafe {
+                *ti = TaskInfo {
+                    status: TaskStatus::Running,
+                    syscall_times: inner.syscall_times,
+                    time: (us - inner.start_time)
+                }
+            }
+            return 0;
+        }
+        return -1;
+    } else {
+        return -1;
+    }
 }
 
 /// YOUR JOB: Implement mmap.
@@ -142,7 +173,24 @@ pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
         "kernel:pid[{}] sys_mmap NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    if _start % PAGE_SIZE != 0 || _port & !0x7 != 0 || _port & 0x7 == 0 {
+        return -1;
+    }
+    let mut permission = MapPermission::from_bits(0).unwrap();
+    if _port & 0x1 == 1 {
+        permission |= MapPermission::R;
+    }
+    if _port & 0x2 == 0x2 {
+        permission |= MapPermission::W;
+    }
+    if _port & 0x4 == 0x4 {
+        permission |= MapPermission::X;
+    }
+    if mmap(_start, _start + _len, permission | MapPermission::U) {
+        return 0;
+    } else {
+        return -1;
+    }
 }
 
 /// YOUR JOB: Implement munmap.
@@ -151,7 +199,14 @@ pub fn sys_munmap(_start: usize, _len: usize) -> isize {
         "kernel:pid[{}] sys_munmap NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    if _start % PAGE_SIZE != 0 {
+        return -1;
+    }
+    if munmap(_start, _start + _len) {
+        return 0;
+    } else {
+        return -1;
+    }
 }
 
 /// change data segment size

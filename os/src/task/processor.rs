@@ -7,6 +7,7 @@
 use super::__switch;
 use super::{fetch_task, TaskStatus};
 use super::{TaskContext, TaskControlBlock};
+use crate::mm::MapPermission;
 use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
 use alloc::sync::Arc;
@@ -108,4 +109,16 @@ pub fn schedule(switched_task_cx_ptr: *mut TaskContext) {
     unsafe {
         __switch(switched_task_cx_ptr, idle_task_cx_ptr);
     }
+}
+
+///
+pub fn mmap(start: usize, end: usize, permission: MapPermission) -> bool {
+    let task = current_task().unwrap();
+    return task.inner_exclusive_access().memory_set.insert_framed_area_with_check(start.into(), end.into(), permission);
+}
+
+///
+pub fn munmap(start: usize, end: usize) -> bool {
+    let task = current_task().unwrap();
+    return task.inner_exclusive_access().memory_set.remove_framed_area_with_check(start.into(), end.into());
 }

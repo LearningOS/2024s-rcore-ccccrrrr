@@ -5,13 +5,11 @@ use core::mem::size_of;
 use crate::{
     config::{MAX_SYSCALL_NUM, PAGE_SIZE},
     loader::get_app_data_by_name,
-    mm::{translated_refmut, translated_str, translated_byte_buffer, MapPermission},
+    mm::{translated_byte_buffer, translated_refmut, translated_str, MapPermission},
     task::{
-        add_task, current_task, current_user_token, exit_current_and_run_next,
-        suspend_current_and_run_next, TaskStatus,
+        add_task, current_task, current_user_token, exit_current_and_run_next, mmap, munmap, suspend_current_and_run_next, TaskControlBlock, TaskStatus
     },
-    timer::{get_time_us, get_time_ms},
-    task::{mmap, munmap}
+    timer::{get_time_ms, get_time_us}
 };
 
 #[repr(C)]
@@ -129,6 +127,7 @@ pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
 
     let buffers = translated_byte_buffer(current_user_token(), _ts as *const u8, size_of::<TimeVal>());
     let ts = buffers[0].as_ptr() as *mut TimeVal;
+    // println!("successfully get buffer.");
     unsafe {
         *ts = TimeVal {
             sec: us / 1_000_000,
@@ -221,19 +220,37 @@ pub fn sys_sbrk(size: i32) -> isize {
 
 /// YOUR JOB: Implement spawn.
 /// HINT: fork + exec =/= spawn
-pub fn sys_spawn(_path: *const u8) -> isize {
+pub fn sys_spawn(path: *const u8) -> isize {
     trace!(
         "kernel:pid[{}] sys_spawn NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
+    let token = current_user_token();
+    let path = translated_str(token, path);
+    if let Some(data) = get_app_data_by_name(path.as_str()) {
+        let new_task = Arc::new(
+            TaskControlBlock::new(data)
+        );
+        let new_pid: usize = new_task.pid.0;
+        let trap_cx = new_task.inner_exclusive_access().get_trap_cx();
+        trap_cx.x[10] = 0;
+        current_task().unwrap().inner_exclusive_access().children.push(new_task.clone());
+
+        add_task(new_task);
+        // suspend_current_and_run_next();
+        return new_pid as isize;
+    }
     -1
 }
 
 // YOUR JOB: Set task priority.
-pub fn sys_set_priority(_prio: isize) -> isize {
+pub fn sys_set_priority(prio: isize) -> isize {
     trace!(
         "kernel:pid[{}] sys_set_priority NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    if prio < 2 {
+        return -1;
+    }
+    prio
 }
